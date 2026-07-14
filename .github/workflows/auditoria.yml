@@ -1,0 +1,36 @@
+name: Auditoría SEO
+
+on:
+  # Corrida automática: todos los días a las 08:00 hora Argentina (11:00 UTC).
+  schedule:
+    - cron: "0 11 * * *"
+  # Botón para dispararla a mano desde la pestaña Actions.
+  workflow_dispatch:
+
+jobs:
+  auditoria:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el repo
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        run: pip install .
+
+      - name: Correr la auditoría
+        run: auditor-seo urls.txt
+
+      - name: Guardar el reporte
+        # Se guarda siempre, incluso si la auditoría falló (así ves qué pasó).
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reporte-auditoria
+          path: |
+            report.md
+            report.json
