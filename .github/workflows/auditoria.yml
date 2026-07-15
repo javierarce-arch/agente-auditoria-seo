@@ -17,6 +17,9 @@ on:
       crawl_semilla:
         description: "URL semilla para --crawl (solo si modo=crawl)"
         default: "https://utnba.centrodeelearning.com/"
+      crawl_max_paginas:
+        description: "Tope de páginas a crawlear (solo si modo=crawl)"
+        default: "80"
 
 jobs:
   auditoria:
@@ -42,13 +45,14 @@ jobs:
         env:
           MODO: ${{ inputs.modo || 'urls.txt' }}
           SEMILLA: ${{ inputs.crawl_semilla || 'https://utnba.centrodeelearning.com/' }}
+          MAX_PAGINAS: ${{ inputs.crawl_max_paginas || '80' }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
           EMAIL_TO_IT: ${{ secrets.EMAIL_TO_IT }}
           EMAIL_TO_MARKETING: ${{ secrets.EMAIL_TO_MARKETING }}
         run: |
           if [ "$MODO" = "crawl" ]; then
-            auditor-seo --crawl "$SEMILLA"
+            auditor-seo --crawl "$SEMILLA" --max-paginas "$MAX_PAGINAS"
           else
             auditor-seo urls.txt
           fi
