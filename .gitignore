@@ -11,7 +11,14 @@ dist/
 # Reportes generados por la auditoría
 report.md
 report.json
+report.html
 
 # Credenciales (nunca subir)
 .env
 *credentials*.json
+*service-account*.json
+*service_account*.json
+token.json
+
+# Config local de Claude Code (sesión), no del proyecto
+.claude/

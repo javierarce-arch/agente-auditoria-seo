@@ -1,4 +1,5 @@
 # Una URL por línea. Las líneas que empiezan con # se ignoran.
 # Poné acá las páginas que SÍ querés que estén indexadas (cursos, home, categorías).
 https://utnba.centrodeelearning.com/
+# https://ui.felipe.dev.redtecnologica.org/  (sitio de prueba usado mientras utnba estaba bloqueada por el WAF)
 # https://utnba.centrodeelearning.com/algun-curso/

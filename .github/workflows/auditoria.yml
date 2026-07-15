@@ -20,9 +20,19 @@ jobs:
           python-version: "3.12"
 
       - name: Instalar dependencias
-        run: pip install .
+        run: pip install ".[mail]"
+
+      - name: Reconstruir el token de Gmail en disco
+        env:
+          GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
+        run: printf '%s' "$GMAIL_TOKEN_JSON" > token.json
 
       - name: Correr la auditoría
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          EMAIL_TO_IT: ${{ secrets.EMAIL_TO_IT }}
+          EMAIL_TO_MARKETING: ${{ secrets.EMAIL_TO_MARKETING }}
         run: auditor-seo urls.txt
 
       - name: Guardar el reporte
@@ -34,3 +44,4 @@ jobs:
           path: |
             report.md
             report.json
+            report.html
