@@ -6,6 +6,17 @@ on:
     - cron: "0 11 * * *"
   # Botón para dispararla a mano desde la pestaña Actions.
   workflow_dispatch:
+    inputs:
+      modo:
+        description: "Cómo se descubren las páginas a auditar"
+        type: choice
+        options:
+          - urls.txt
+          - crawl
+        default: urls.txt
+      crawl_semilla:
+        description: "URL semilla para --crawl (solo si modo=crawl)"
+        default: "https://utnba.centrodeelearning.com/"
 
 jobs:
   auditoria:
@@ -29,11 +40,18 @@ jobs:
 
       - name: Correr la auditoría
         env:
+          MODO: ${{ inputs.modo || 'urls.txt' }}
+          SEMILLA: ${{ inputs.crawl_semilla || 'https://utnba.centrodeelearning.com/' }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
           EMAIL_TO_IT: ${{ secrets.EMAIL_TO_IT }}
           EMAIL_TO_MARKETING: ${{ secrets.EMAIL_TO_MARKETING }}
-        run: auditor-seo urls.txt
+        run: |
+          if [ "$MODO" = "crawl" ]; then
+            auditor-seo --crawl "$SEMILLA"
+          else
+            auditor-seo urls.txt
+          fi
 
       - name: Guardar el reporte
         # Se guarda siempre, incluso si la auditoría falló (así ves qué pasó).
