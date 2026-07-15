@@ -62,9 +62,8 @@ significa" en criollo.
   ver "Notificaciones por mail" más abajo.
 - `src/auditor_seo/cli.py` — orquesta la corrida sobre varias URLs (de
   `urls.txt` o del crawler), arma los reportes (`report.md`, `report.json`,
-  `report.html`), manda las notificaciones por mail y define el resultado de
-  la Action (verde/rojo). Es el entrypoint de CI (expuesto como el comando
-  `auditor-seo`).
+  `report.html`) y manda las notificaciones por mail. Es el entrypoint de CI
+  (expuesto como el comando `auditor-seo`).
 - `scripts/gmail_auth.py` — genera el `token.json` para las notificaciones
   por mail (se corre una sola vez, a mano).
 - `urls.txt` — lista de páginas a auditar (una por línea).
@@ -146,8 +145,8 @@ reglas de seguridad:
   timeouts en una página puntual, sin cortar la corrida.
 
 Las URLs que descubre se auditan exactamente igual que las de `urls.txt` (mismo
-reporte, mismo criterio de verde/rojo). `urls.txt` sigue siendo una opción
-válida — el crawler no lo reemplaza, solo evita tener que mantenerlo a mano.
+reporte, mismas notificaciones). `urls.txt` sigue siendo una opción válida —
+el crawler no lo reemplaza, solo evita tener que mantenerlo a mano.
 
 ## User-Agent
 
@@ -319,14 +318,18 @@ pestaña **Actions**. Al terminar deja el reporte (`report.md`, `report.json`
 y `report.html`) como *artifact* de la corrida, y dispara las notificaciones
 por mail descriptas arriba (si están configuradas).
 
-La corrida se marca en **rojo** cuando aparece un problema de **indexación** que
-requiere atención (un `noindex` inesperado, un canonical a otra URL, o una página
-que no responde). El resto de los hallazgos va al reporte pero no rompe el build.
-Ese umbral se ajusta en `SEVERIDADES_QUE_FALLAN`, dentro de `src/auditor_seo/cli.py`.
-Es un criterio distinto y más angosto que el del mail a Marketing (que mira
-ALTA en cualquier categoría, no solo indexación) — a propósito: lo que hace
-fallar la Action es "esto puede sacar la página de Google", y lo que le
-llega a Marketing es "esto amerita revisión", que es un universo más amplio.
+**La Action no se marca en rojo por hallazgos de SEO** — solo fallaría ante un
+error real del pipeline (por ejemplo, no se pudo instalar el paquete). La señal
+de "hay algo para revisar" vive en el mail y en el dashboard, no en el
+semáforo verde/rojo de GitHub: mandar eso a rojo daba la falsa impresión de que
+la corrida se rompió, cuando en realidad corrió bien y encontró hallazgos reales.
+
+Esa señal se calcula igual que antes con `SEVERIDADES_DE_ATENCION`, dentro de
+`src/auditor_seo/cli.py` — hoy son los hallazgos de **indexación** con severidad
+`alta` o `revisar` (un `noindex` inesperado, un canonical a otra URL, una página
+que no responde). Ese conteo determina el 🔴/🟢 del dashboard y el asunto del
+mail a IT, y es un criterio distinto y más angosto que el del mail a Marketing
+(que mira ALTA en cualquier categoría, no solo indexación).
 
 ## Roadmap (próximos pasos)
 

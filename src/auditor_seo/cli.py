@@ -5,9 +5,11 @@ Qué hace:
   1. Arma la lista de URLs a auditar: desde un archivo (por defecto 'urls.txt')
      o, con --crawl, descubriéndolas al crawlear el sitio desde una URL semilla.
   2. Corre el auditor sobre cada una (reutiliza auditor.py sin tocarlo).
-  3. Escribe dos reportes: report.md (para leer) y report.json (para procesar).
-  4. Devuelve exit code != 0 si hay problemas de INDEXACIÓN que requieren atención,
-     para que la corrida se marque en rojo y llegue la notificación.
+  3. Escribe tres reportes: report.md (para leer), report.json (para procesar)
+     y report.html (dashboard), y manda las notificaciones por mail (opcional).
+  4. El exit code solo es != 0 ante un error real del pipeline (una excepción
+     no manejada) — los hallazgos de indexación NO hacen fallar la corrida;
+     esa señal vive en el mail y en el dashboard, no en el semáforo de la Action.
 
 La lógica de auditoría vive en auditor.py; este archivo solo la orquesta.
 """
@@ -28,9 +30,9 @@ from auditor_seo.crawler import (
     crawlear,
 )
 
-# Severidades de INDEXACIÓN que hacen fallar el build (lo que más preocupa a UTN).
-# El resto (on-page, canonical faltante, etc.) va al reporte pero no rompe la corrida.
-SEVERIDADES_QUE_FALLAN = {"alta", "revisar"}
+# Severidades de INDEXACIÓN que marcan "requiere atención" en el reporte y el
+# mail (lo que más preocupa a UTN). Ya NO hacen fallar la Action — ver main().
+SEVERIDADES_DE_ATENCION = {"alta", "revisar"}
 
 # Orden de prioridad para el dashboard (report.html): ALTA primero, BAJA al final.
 ORDEN_SEVERIDAD = {"alta": 0, "revisar": 1, "media": 2, "baja": 3}
@@ -114,7 +116,7 @@ def calcular_metricas(resultados):
 def hay_hallazgos_alta(resultados):
     """True si hay al menos un hallazgo de severidad 'alta' en indexación o
     en on-page técnico, en cualquier página. Distinto de
-    SEVERIDADES_QUE_FALLAN/atencion (que solo mira indexación y también
+    SEVERIDADES_DE_ATENCION/atencion (que solo mira indexación y también
     cuenta 'revisar') — esta es la condición para avisarle a Marketing."""
     return any(
         h["severidad"] == "alta"
@@ -287,7 +289,7 @@ def main(argv=None):
                 rep["indexacion"].append(hallazgo_gsc)
 
         atencion += sum(1 for h in rep["indexacion"]
-                        if h["severidad"] in SEVERIDADES_QUE_FALLAN)
+                        if h["severidad"] in SEVERIDADES_DE_ATENCION)
         resultados.append({"url": origen, "reporte": rep, "google": gsc.estado_a_dict(estado_google)})
 
     # Chequeos cruzados (necesitan ver todas las páginas juntas, no una por vez).
@@ -307,9 +309,9 @@ def main(argv=None):
 
     print(f"Auditadas {len(urls)} URL(s). Ítems de indexación que requieren atención: {atencion}.")
     if atencion:
-        print("Hay problemas de indexación: la corrida se marca en rojo.")
-        return 1
-    print("Sin problemas de indexación. Todo OK.")
+        print("Hay problemas de indexación: revisá el mail o el dashboard.")
+    else:
+        print("Sin problemas de indexación. Todo OK.")
     return 0
 
 
