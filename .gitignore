@@ -12,6 +12,7 @@ dist/
 report.md
 report.json
 report.html
+_site/
 
 # Credenciales (nunca subir)
 .env

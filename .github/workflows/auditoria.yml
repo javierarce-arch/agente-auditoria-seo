@@ -24,6 +24,13 @@ on:
 jobs:
   auditoria:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Descargar el repo
         uses: actions/checkout@v4
@@ -50,6 +57,10 @@ jobs:
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
           EMAIL_TO_IT: ${{ secrets.EMAIL_TO_IT }}
           EMAIL_TO_MARKETING: ${{ secrets.EMAIL_TO_MARKETING }}
+          # URL fija del sitio de Pages (ver step "Publicar en GitHub Pages" más abajo):
+          # se linkea en el mail aunque el deploy todavía no haya corrido en esta misma
+          # corrida, porque para cuando alguien abre el mail ya está publicado.
+          REPORT_URL: "https://javierarce-arch.github.io/agente-auditoria-seo/"
         run: |
           if [ "$MODO" = "crawl" ]; then
             auditor-seo --crawl "$SEMILLA" --max-paginas "$MAX_PAGINAS"
@@ -67,3 +78,24 @@ jobs:
             report.md
             report.json
             report.html
+
+      - name: Preparar sitio para Pages
+        if: always()
+        run: |
+          mkdir -p _site
+          if [ -f report.html ]; then
+            cp report.html _site/index.html
+          else
+            echo "<html><body>No se generó report.html en esta corrida.</body></html>" > _site/index.html
+          fi
+
+      - name: Subir artifact de Pages
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Publicar en GitHub Pages
+        if: always()
+        id: deployment
+        uses: actions/deploy-pages@v4

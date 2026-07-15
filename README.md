@@ -110,6 +110,14 @@ pensado para revisar de un vistazo qué hay que arreglar primero:
   del sitio), aparece una sola vez, con la cantidad de páginas afectadas y
   el listado plegable (clickeable) de cuáles son.
 
+Cada corrida de la Action publica este archivo en GitHub Pages:
+**https://javierarce-arch.github.io/agente-auditoria-seo/**. El link (no
+un adjunto) es lo que se manda en las notificaciones por mail — mandar el
+`.html` como adjunto no sirve, porque muchos clientes de mail no lo
+renderizan y muestran el código fuente en vez de la página. Por eso el
+repo es público: el contenido (mejoras técnicas de SEO) no es sensible, y
+así Pages puede publicarlo gratis sin necesitar un plan pago.
+
 ## Crawler
 
 En vez de mantener `urls.txt` a mano, `auditor-seo` puede descubrir las páginas
@@ -242,11 +250,17 @@ auditor corre exactamente igual que hoy.
 Hay dos destinatarios con criterios distintos:
 
 - **IT**: recibe un mail en **cada corrida**, con el resumen de métricas
-  (cuenta por prioridad) y `report.html` + `report.md` adjuntos.
+  (cuenta por prioridad), el link al dashboard publicado en GitHub Pages, y
+  `report.md` adjunto (para revisión offline).
 - **Marketing**: recibe un mail **solo si hay al menos un hallazgo de
   prioridad ALTA** (de indexación o de on-page — más amplio que el criterio
-  que usa la Action para marcarse en rojo, que solo mira indexación), con
-  `report.html` adjunto.
+  que usa la Action para marcarse en rojo, que solo mira indexación), con el
+  link al dashboard.
+
+El dashboard nunca se manda como adjunto: se linkea la copia publicada en
+GitHub Pages (variable de entorno `REPORT_URL`, que en la Action ya viene
+seteada con la URL fija del sitio). Sin `REPORT_URL` (ej. corriendo en
+local), el mail se manda igual, solo que sin el link.
 
 ### Setup
 

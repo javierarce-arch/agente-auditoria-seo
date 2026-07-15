@@ -2,6 +2,8 @@ from auditor_seo import correo, gsc
 from auditor_seo.auditor import USER_AGENT_DEFAULT
 from auditor_seo.cli import (
     _avisar_por_mail,
+    _cuerpo_mail_it,
+    _cuerpo_mail_marketing,
     agrupar_hallazgos,
     agrupar_por_campo,
     calcular_metricas,
@@ -264,3 +266,43 @@ def test_avisar_por_mail_fallo_en_it_no_impide_marketing(monkeypatch):
     _avisar_por_mail(1, _metricas(alta=1), alta_presente=True)
 
     assert llamadas == [["mkt@utn.test"]]
+
+
+def test_avisar_por_mail_nunca_adjunta_report_html(monkeypatch):
+    # El dashboard se linkea (REPORT_URL), nunca se adjunta — muchos clientes
+    # de mail no lo renderizan y muestran el HTML crudo en vez de la página.
+    monkeypatch.setattr(correo, "credenciales_disponibles", lambda: True)
+    monkeypatch.setenv("EMAIL_TO_IT", "it@utn.test")
+    monkeypatch.setenv("EMAIL_TO_MARKETING", "mkt@utn.test")
+    llamadas = []
+    monkeypatch.setattr(correo, "enviar_mail", lambda *a, **k: llamadas.append(k.get("adjuntos")))
+
+    _avisar_por_mail(0, _metricas(alta=1), alta_presente=True)
+
+    for adjuntos in llamadas:
+        assert adjuntos is None or "report.html" not in adjuntos
+
+
+def test_avisar_por_mail_incluye_report_url_en_el_cuerpo(monkeypatch):
+    monkeypatch.setattr(correo, "credenciales_disponibles", lambda: True)
+    monkeypatch.setenv("EMAIL_TO_IT", "it@utn.test")
+    monkeypatch.setenv("EMAIL_TO_MARKETING", "mkt@utn.test")
+    monkeypatch.setenv("REPORT_URL", "https://javierarce-arch.github.io/agente-auditoria-seo/")
+    cuerpos = []
+    monkeypatch.setattr(correo, "enviar_mail", lambda asunto, cuerpo, destinatarios, **k: cuerpos.append(cuerpo))
+
+    _avisar_por_mail(0, _metricas(alta=1), alta_presente=True)
+
+    assert all("https://javierarce-arch.github.io/agente-auditoria-seo/" in c for c in cuerpos)
+
+
+def test_cuerpo_mail_it_sin_report_url_no_rompe():
+    cuerpo = _cuerpo_mail_it(0, _metricas(), url_dashboard=None)
+
+    assert "Dashboard:" not in cuerpo
+
+
+def test_cuerpo_mail_marketing_sin_report_url_da_alternativa():
+    cuerpo = _cuerpo_mail_marketing(_metricas(alta=2), url_dashboard=None)
+
+    assert "artifact" in cuerpo

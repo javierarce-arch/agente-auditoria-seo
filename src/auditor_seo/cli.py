@@ -128,8 +128,9 @@ def _destinatarios(variable_entorno):
     return [a.strip() for a in os.environ.get(variable_entorno, "").split(",") if a.strip()]
 
 
-def _cuerpo_mail_it(atencion, metricas):
+def _cuerpo_mail_it(atencion, metricas, url_dashboard):
     estado = "Requiere atención (rojo)" if atencion else "OK (verde)"
+    link = f"Dashboard: {url_dashboard}\n\n" if url_dashboard else ""
     return (
         "Resumen de la corrida de auditoría SEO.\n\n"
         f"Estado: {estado}\n"
@@ -139,7 +140,16 @@ def _cuerpo_mail_it(atencion, metricas):
         f"A REVISAR: {metricas['revisar']}\n"
         f"MEDIA: {metricas['media']}\n"
         f"BAJA: {metricas['baja']}\n\n"
-        "Se adjunta el dashboard (report.html) y el reporte detallado (report.md)."
+        f"{link}"
+        "Se adjunta el reporte detallado (report.md)."
+    )
+
+
+def _cuerpo_mail_marketing(metricas, url_dashboard):
+    link = f"Dashboard: {url_dashboard}" if url_dashboard else "Revisá report.html en el artifact de la corrida."
+    return (
+        f"La auditoría SEO de hoy encontró {metricas['alta']} problema(s) de prioridad ALTA.\n\n"
+        f"{link}"
     )
 
 
@@ -149,17 +159,24 @@ def _avisar_por_mail(atencion, metricas, alta_presente):
     ALTA (ver hay_hallazgos_alta). Sin credenciales o sin destinatarios
     configurados, no hace nada — igual que Search Console, esto nunca debe
     tumbar la corrida.
+
+    El dashboard NUNCA se manda como adjunto: muchos clientes de mail no lo
+    renderizan (muestran el HTML crudo), así que se linkea la copia
+    publicada en GitHub Pages (variable de entorno REPORT_URL). Sin esa
+    variable, el mail sigue funcionando pero sin el link.
     """
     if not correo.credenciales_disponibles():
         print("Notificación por mail: deshabilitada (no se encontró el token de Gmail).")
         return
 
+    url_dashboard = os.environ.get("REPORT_URL")
+
     destinatarios_it = _destinatarios("EMAIL_TO_IT")
     if destinatarios_it:
         try:
             asunto = f"[Auditoría SEO] {'Requiere atención' if atencion else 'OK'}"
-            correo.enviar_mail(asunto, _cuerpo_mail_it(atencion, metricas), destinatarios_it,
-                                adjuntos=["report.html", "report.md"])
+            correo.enviar_mail(asunto, _cuerpo_mail_it(atencion, metricas, url_dashboard), destinatarios_it,
+                                adjuntos=["report.md"])
             print(f"Mail a IT enviado a: {', '.join(destinatarios_it)}.")
         except Exception as e:
             print(f"No se pudo enviar el mail a IT: {e}")
@@ -170,10 +187,8 @@ def _avisar_por_mail(atencion, metricas, alta_presente):
         destinatarios_mkt = _destinatarios("EMAIL_TO_MARKETING")
         if destinatarios_mkt:
             try:
-                cuerpo = (f"La auditoría SEO de hoy encontró {metricas['alta']} problema(s) de "
-                          "prioridad ALTA. Se adjunta el dashboard con el detalle y las páginas afectadas.")
                 correo.enviar_mail("[Auditoría SEO] Se detectaron problemas de prioridad ALTA",
-                                    cuerpo, destinatarios_mkt, adjuntos=["report.html"])
+                                    _cuerpo_mail_marketing(metricas, url_dashboard), destinatarios_mkt)
                 print(f"Mail a Marketing enviado a: {', '.join(destinatarios_mkt)}.")
             except Exception as e:
                 print(f"No se pudo enviar el mail a Marketing: {e}")
