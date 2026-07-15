@@ -17,8 +17,12 @@ from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
+try:
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+except ImportError:
+    Request = None
+    Credentials = None
 
 _GMAIL_SCOPES = ["https://mail.google.com/"]
 
@@ -30,6 +34,11 @@ def credenciales_disponibles(ruta_token=None):
 
 
 def _token_acceso(ruta_token):
+    if Credentials is None:
+        raise SystemExit(
+            "Hay un token de Gmail pero faltan las dependencias de mail. "
+            "Instalá el extra: pip install -e '.[mail]'"
+        )
     creds = Credentials.from_authorized_user_file(ruta_token, _GMAIL_SCOPES)
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
