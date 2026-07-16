@@ -4,7 +4,7 @@ aplicación ni Action de terceros).
 
 Mismo mecanismo que ya corre en producción en el proyecto hermano
 `agente-reporte-diario-devs` (ver src/deliver_email.py ahí), portado acá con
-soporte de adjuntos (para mandar report.html).
+soporte de adjuntos.
 
 Requiere el extra opcional 'mail' (`pip install ".[mail]"`) y un token OAuth
 generado una sola vez, a mano, con `python scripts/gmail_auth.py`.
@@ -66,7 +66,7 @@ def enviar_mail(asunto, cuerpo, destinatarios, adjuntos=None):
     Manda un mail por Gmail SMTP con OAuth2.
 
     `destinatarios`: lista de direcciones.
-    `adjuntos`: lista de rutas de archivo a adjuntar tal cual (ej. ["report.html"]).
+    `adjuntos`: lista de rutas de archivo a adjuntar tal cual.
 
     Variables de entorno usadas: SMTP_HOST (default smtp.gmail.com),
     SMTP_PORT (default 587), SMTP_USER (obligatoria), SMTP_FROM (default:

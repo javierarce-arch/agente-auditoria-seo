@@ -60,10 +60,12 @@ significa" en criollo.
   páginas entre sí (hoy: títulos y meta descriptions duplicados).
 - `src/auditor_seo/correo.py` — envío de mail de aviso por Gmail (OAuth2),
   ver "Notificaciones por mail" más abajo.
+- `src/auditor_seo/confluence.py` — publica el dashboard consolidado como
+  página de Confluence, ver "Confluence" más abajo.
 - `src/auditor_seo/cli.py` — orquesta la corrida sobre varias URLs (de
-  `urls.txt` o del crawler), arma los reportes (`report.md`, `report.json`,
-  `report.html`) y manda las notificaciones por mail. Es el entrypoint de CI
-  (expuesto como el comando `auditor-seo`).
+  `urls.txt` o del crawler), publica el dashboard en Confluence y manda las
+  notificaciones por mail. Es el entrypoint de CI (expuesto como el comando
+  `auditor-seo`).
 - `scripts/gmail_auth.py` — genera el `token.json` para las notificaciones
   por mail (se corre una sola vez, a mano).
 - `urls.txt` — lista de páginas a auditar (una por línea).
@@ -93,29 +95,51 @@ pytest
 ruff check .
 ```
 
-## Dashboard (`report.html`)
+`auditor-seo` no deja ningún reporte en disco: el resumen se imprime por
+consola y el dashboard consolidado se publica directo en Confluence (ver
+sección de abajo).
 
-Además de `report.md` (para leer línea por línea) y `report.json` (para
-procesar), `auditor-seo` genera `report.html`: un dashboard autocontenido
-(sin dependencias externas, se abre con doble clic en cualquier navegador)
-pensado para revisar de un vistazo qué hay que arreglar primero:
+## Confluence (dashboard)
+
+El dashboard consolidado de cada corrida se publica como una página de
+Confluence — así queda un historial navegable (una página por día) y
+Marketing puede accionar sobre cada corrida sin que la de mañana pise la de
+hoy:
 
 - **Métricas por prioridad** arriba de todo: cantidad de hallazgos ALTA, A
   REVISAR, MEDIA y BAJA, más cuántas páginas de las auditadas no tienen
   ningún hallazgo.
-- **Ordenado por prioridad** (ALTA → BAJA), no por página como `report.md`.
-- **Consolidado**: si el mismo problema aparece en varias páginas (por
-  ejemplo, un link de navegación con mayúsculas presente en las 80 páginas
-  del sitio), aparece una sola vez, con la cantidad de páginas afectadas y
-  el listado plegable (clickeable) de cuáles son.
+- **Leyenda**: qué significa cada nivel de severidad.
+- **Hallazgos ordenados por prioridad** (ALTA → BAJA) y **consolidados**: si
+  el mismo problema aparece en varias páginas (por ejemplo, un link de
+  navegación con mayúsculas presente en las 80 páginas del sitio), aparece
+  una sola vez, con la cantidad de páginas afectadas y el bloque plegable
+  (macro "expand" de Confluence) de cuáles son.
 
-Cada corrida de la Action publica este archivo en GitHub Pages:
-**https://javierarce-arch.github.io/agente-auditoria-seo/**. El link (no
-un adjunto) es lo que se manda en las notificaciones por mail — mandar el
-`.html` como adjunto no sirve, porque muchos clientes de mail no lo
-renderizan y muestran el código fuente en vez de la página. Por eso el
-repo es público: el contenido (mejoras técnicas de SEO) no es sensible, y
-así Pages puede publicarlo gratis sin necesitar un plan pago.
+Cada corrida hace upsert por título (`Auditoría SEO — AAAA-MM-DD`): si se
+corre dos veces el mismo día, actualiza esa misma página en vez de duplicarla.
+Es opcional: sin las variables de entorno de abajo, la publicación queda
+deshabilitada (el resto del auditor corre igual, mismo criterio que Search
+Console y el mail) y el mail sale sin el link al dashboard.
+
+### Setup
+
+1. Generar un API token de Confluence en
+   [id.atlassian.com → API tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
+2. Definir las variables de entorno (local) o secrets (CI):
+   ```bash
+   export CONFLUENCE_BASE_URL="https://tuorg.atlassian.net"
+   export CONFLUENCE_EMAIL="bot@tuorg.com"          # cuenta dueña del API token
+   export CONFLUENCE_API_TOKEN="tu_api_token"
+   export CONFLUENCE_SPACE_KEY="~712020..."         # key del espacio (de la URL de la carpeta)
+   export CONFLUENCE_PARENT_PAGE_ID="3913023489"    # id de la carpeta/página padre (de la URL)
+   ```
+   El espacio y la carpeta padre se identifican en la URL de Confluence, por
+   ejemplo `.../spaces/<SPACE_KEY>/folder/<PARENT_PAGE_ID>/...`.
+
+En CI, estos valores se cargan como **secrets** del repo (Settings → Secrets
+and variables → Actions): `CONFLUENCE_BASE_URL`, `CONFLUENCE_EMAIL`,
+`CONFLUENCE_API_TOKEN`, `CONFLUENCE_SPACE_KEY`, `CONFLUENCE_PARENT_PAGE_ID`.
 
 ## Crawler
 
@@ -249,17 +273,17 @@ auditor corre exactamente igual que hoy.
 Hay dos destinatarios con criterios distintos:
 
 - **IT**: recibe un mail en **cada corrida**, con el resumen de métricas
-  (cuenta por prioridad), el link al dashboard publicado en GitHub Pages, y
-  `report.md` adjunto (para revisión offline).
+  (cuenta por prioridad) y el link a la página de Confluence publicada por
+  esta corrida.
 - **Marketing**: recibe un mail **solo si hay al menos un hallazgo de
   prioridad ALTA** (de indexación o de on-page — más amplio que el criterio
   que usa la Action para marcarse en rojo, que solo mira indexación), con el
-  link al dashboard.
+  link a esa misma página de Confluence.
 
-El dashboard nunca se manda como adjunto: se linkea la copia publicada en
-GitHub Pages (variable de entorno `REPORT_URL`, que en la Action ya viene
-seteada con la URL fija del sitio). Sin `REPORT_URL` (ej. corriendo en
-local), el mail se manda igual, solo que sin el link.
+El dashboard nunca se manda como adjunto: se linkea la página de Confluence
+que publicó esta misma corrida (ver sección "Confluence" más arriba). Si esa
+publicación falla o no está configurada, el mail se manda igual, solo que sin
+el link.
 
 ### Setup
 
@@ -314,9 +338,8 @@ partir de `GMAIL_TOKEN_JSON`. Si el token se revoca, hay que regenerarlo con
 ## Cómo funciona la Action
 
 Corre sola todos los días (cron) y también se puede disparar a mano desde la
-pestaña **Actions**. Al terminar deja el reporte (`report.md`, `report.json`
-y `report.html`) como *artifact* de la corrida, y dispara las notificaciones
-por mail descriptas arriba (si están configuradas).
+pestaña **Actions**. Al terminar publica el dashboard en Confluence y dispara
+las notificaciones por mail descriptas arriba (si están configuradas).
 
 **La Action no se marca en rojo por hallazgos de SEO** — solo fallaría ante un
 error real del pipeline (por ejemplo, no se pudo instalar el paquete). La señal

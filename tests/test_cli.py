@@ -8,7 +8,6 @@ from auditor_seo.cli import (
     agrupar_por_campo,
     calcular_metricas,
     construir_parser,
-    escribir_html,
     hay_hallazgos_alta,
     ordenar_por_prioridad,
 )
@@ -187,23 +186,6 @@ def test_hay_hallazgos_alta_false_sin_hallazgos_alta():
     assert hay_hallazgos_alta(resultados) is False
 
 
-# ============== escribir_html ==============
-
-def test_escribir_html_genera_archivo_autocontenido(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    resultados = [
-        _resultado("https://sitio.test/a", on_page=[_hallazgo("Título", "alta", "<script>alert(1)</script>")]),
-    ]
-
-    escribir_html(resultados, atencion=0)
-
-    contenido = (tmp_path / "report.html").read_text(encoding="utf-8")
-    assert "https://sitio.test/a" in contenido
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in contenido
-    assert "<script>alert(1)</script>" not in contenido
-    assert "cdn." not in contenido and "googleapis" not in contenido
-
-
 # ============== _avisar_por_mail ==============
 
 def _metricas(**overrides):
@@ -216,7 +198,7 @@ def test_avisar_por_mail_no_hace_nada_sin_credenciales(monkeypatch):
     llamadas = []
     monkeypatch.setattr(correo, "enviar_mail", lambda *a, **k: llamadas.append(a))
 
-    _avisar_por_mail(0, _metricas(), alta_presente=False)
+    _avisar_por_mail(0, _metricas(), alta_presente=False, url_dashboard=None)
 
     assert llamadas == []
 
@@ -228,7 +210,7 @@ def test_avisar_por_mail_a_it_siempre_si_hay_destinatario(monkeypatch):
     llamadas = []
     monkeypatch.setattr(correo, "enviar_mail", lambda *a, **k: llamadas.append(a))
 
-    _avisar_por_mail(0, _metricas(), alta_presente=False)
+    _avisar_por_mail(0, _metricas(), alta_presente=False, url_dashboard=None)
 
     assert len(llamadas) == 1
     assert llamadas[0][2] == ["it@utn.test"]
@@ -241,10 +223,10 @@ def test_avisar_por_mail_a_marketing_solo_si_hay_alta(monkeypatch):
     llamadas = []
     monkeypatch.setattr(correo, "enviar_mail", lambda *a, **k: llamadas.append(a))
 
-    _avisar_por_mail(0, _metricas(), alta_presente=False)
+    _avisar_por_mail(0, _metricas(), alta_presente=False, url_dashboard=None)
     assert llamadas == []
 
-    _avisar_por_mail(0, _metricas(alta=1), alta_presente=True)
+    _avisar_por_mail(0, _metricas(alta=1), alta_presente=True, url_dashboard=None)
     assert len(llamadas) == 1
     assert llamadas[0][2] == ["mkt@utn.test"]
 
@@ -263,46 +245,48 @@ def test_avisar_por_mail_fallo_en_it_no_impide_marketing(monkeypatch):
 
     monkeypatch.setattr(correo, "enviar_mail", enviar_mail_falla_para_it)
 
-    _avisar_por_mail(1, _metricas(alta=1), alta_presente=True)
+    _avisar_por_mail(1, _metricas(alta=1), alta_presente=True, url_dashboard=None)
 
     assert llamadas == [["mkt@utn.test"]]
 
 
-def test_avisar_por_mail_nunca_adjunta_report_html(monkeypatch):
-    # El dashboard se linkea (REPORT_URL), nunca se adjunta — muchos clientes
-    # de mail no lo renderizan y muestran el HTML crudo en vez de la página.
+def test_avisar_por_mail_nunca_adjunta_nada(monkeypatch):
+    # El dashboard se linkea (página de Confluence), nunca se adjunta — muchos
+    # clientes de mail no lo renderizan y muestran el HTML crudo en vez de la
+    # página.
     monkeypatch.setattr(correo, "credenciales_disponibles", lambda: True)
     monkeypatch.setenv("EMAIL_TO_IT", "it@utn.test")
     monkeypatch.setenv("EMAIL_TO_MARKETING", "mkt@utn.test")
     llamadas = []
     monkeypatch.setattr(correo, "enviar_mail", lambda *a, **k: llamadas.append(k.get("adjuntos")))
 
-    _avisar_por_mail(0, _metricas(alta=1), alta_presente=True)
+    _avisar_por_mail(0, _metricas(alta=1), alta_presente=True, url_dashboard=None)
 
-    for adjuntos in llamadas:
-        assert adjuntos is None or "report.html" not in adjuntos
+    assert llamadas == [None, None]
 
 
-def test_avisar_por_mail_incluye_report_url_en_el_cuerpo(monkeypatch):
+def test_avisar_por_mail_incluye_url_dashboard_en_el_cuerpo(monkeypatch):
     monkeypatch.setattr(correo, "credenciales_disponibles", lambda: True)
     monkeypatch.setenv("EMAIL_TO_IT", "it@utn.test")
     monkeypatch.setenv("EMAIL_TO_MARKETING", "mkt@utn.test")
-    monkeypatch.setenv("REPORT_URL", "https://javierarce-arch.github.io/agente-auditoria-seo/")
     cuerpos = []
     monkeypatch.setattr(correo, "enviar_mail", lambda asunto, cuerpo, destinatarios, **k: cuerpos.append(cuerpo))
 
-    _avisar_por_mail(0, _metricas(alta=1), alta_presente=True)
+    _avisar_por_mail(0, _metricas(alta=1), alta_presente=True,
+                      url_dashboard="https://fepp.atlassian.net/wiki/spaces/x/pages/1/Auditoria")
 
-    assert all("https://javierarce-arch.github.io/agente-auditoria-seo/" in c for c in cuerpos)
+    assert all("https://fepp.atlassian.net/wiki/spaces/x/pages/1/Auditoria" in c for c in cuerpos)
 
 
-def test_cuerpo_mail_it_sin_report_url_no_rompe():
+def test_cuerpo_mail_it_sin_url_dashboard_no_rompe():
     cuerpo = _cuerpo_mail_it(0, _metricas(), url_dashboard=None)
 
     assert "Dashboard:" not in cuerpo
+    assert "No se pudo publicar" in cuerpo
 
 
-def test_cuerpo_mail_marketing_sin_report_url_da_alternativa():
+def test_cuerpo_mail_marketing_sin_url_dashboard_da_alternativa():
     cuerpo = _cuerpo_mail_marketing(_metricas(alta=2), url_dashboard=None)
 
-    assert "artifact" in cuerpo
+    assert "Dashboard:" not in cuerpo
+    assert "No se pudo publicar" in cuerpo

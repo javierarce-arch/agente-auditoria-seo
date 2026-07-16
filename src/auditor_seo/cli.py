@@ -5,8 +5,8 @@ Qué hace:
   1. Arma la lista de URLs a auditar: desde un archivo (por defecto 'urls.txt')
      o, con --crawl, descubriéndolas al crawlear el sitio desde una URL semilla.
   2. Corre el auditor sobre cada una (reutiliza auditor.py sin tocarlo).
-  3. Escribe tres reportes: report.md (para leer), report.json (para procesar)
-     y report.html (dashboard), y manda las notificaciones por mail (opcional).
+  3. Publica el dashboard como página de Confluence (opcional, ver
+     confluence.py) y manda las notificaciones por mail (opcional) con el link.
   4. El exit code solo es != 0 ante un error real del pipeline (una excepción
      no manejada) — los hallazgos de indexación NO hacen fallar la corrida;
      esa señal vive en el mail y en el dashboard, no en el semáforo de la Action.
@@ -15,13 +15,11 @@ La lógica de auditoría vive en auditor.py; este archivo solo la orquesta.
 """
 
 import argparse
-import json
 import os
 import sys
 import time
-from html import escape
 
-from auditor_seo import correo, gsc, multipagina
+from auditor_seo import confluence, correo, gsc, multipagina
 from auditor_seo.auditor import THIN_CONTENT_DEFAULT, USER_AGENT_DEFAULT, auditar, cargar
 from auditor_seo.crawler import (
     DELAY_DEFAULT,
@@ -34,7 +32,7 @@ from auditor_seo.crawler import (
 # mail (lo que más preocupa a UTN). Ya NO hacen fallar la Action — ver main().
 SEVERIDADES_DE_ATENCION = {"alta", "revisar"}
 
-# Orden de prioridad para el dashboard (report.html): ALTA primero, BAJA al final.
+# Orden de prioridad para el dashboard de Confluence: ALTA primero, BAJA al final.
 ORDEN_SEVERIDAD = {"alta": 0, "revisar": 1, "media": 2, "baja": 3}
 
 
@@ -132,7 +130,7 @@ def _destinatarios(variable_entorno):
 
 def _cuerpo_mail_it(atencion, metricas, url_dashboard):
     estado = "Requiere atención (rojo)" if atencion else "OK (verde)"
-    link = f"Dashboard: {url_dashboard}\n\n" if url_dashboard else ""
+    link = f"Dashboard: {url_dashboard}" if url_dashboard else "No se pudo publicar el dashboard esta corrida."
     return (
         "Resumen de la corrida de auditoría SEO.\n\n"
         f"Estado: {estado}\n"
@@ -143,19 +141,18 @@ def _cuerpo_mail_it(atencion, metricas, url_dashboard):
         f"MEDIA: {metricas['media']}\n"
         f"BAJA: {metricas['baja']}\n\n"
         f"{link}"
-        "Se adjunta el reporte detallado (report.md)."
     )
 
 
 def _cuerpo_mail_marketing(metricas, url_dashboard):
-    link = f"Dashboard: {url_dashboard}" if url_dashboard else "Revisá report.html en el artifact de la corrida."
+    link = f"Dashboard: {url_dashboard}" if url_dashboard else "No se pudo publicar el dashboard esta corrida."
     return (
         f"La auditoría SEO de hoy encontró {metricas['alta']} problema(s) de prioridad ALTA.\n\n"
         f"{link}"
     )
 
 
-def _avisar_por_mail(atencion, metricas, alta_presente):
+def _avisar_por_mail(atencion, metricas, alta_presente, url_dashboard):
     """
     IT recibe un mail en cada corrida. Marketing solo si hay ≥1 hallazgo
     ALTA (ver hay_hallazgos_alta). Sin credenciales o sin destinatarios
@@ -163,22 +160,20 @@ def _avisar_por_mail(atencion, metricas, alta_presente):
     tumbar la corrida.
 
     El dashboard NUNCA se manda como adjunto: muchos clientes de mail no lo
-    renderizan (muestran el HTML crudo), así que se linkea la copia
-    publicada en GitHub Pages (variable de entorno REPORT_URL). Sin esa
-    variable, el mail sigue funcionando pero sin el link.
+    renderizan (muestran el HTML crudo), así que se linkea la página de
+    Confluence publicada por esta misma corrida (url_dashboard, o None si
+    la publicación falló o no está configurada — el mail sigue saliendo,
+    solo que sin el link).
     """
     if not correo.credenciales_disponibles():
         print("Notificación por mail: deshabilitada (no se encontró el token de Gmail).")
         return
 
-    url_dashboard = os.environ.get("REPORT_URL")
-
     destinatarios_it = _destinatarios("EMAIL_TO_IT")
     if destinatarios_it:
         try:
             asunto = f"[Auditoría SEO] {'Requiere atención' if atencion else 'OK'}"
-            correo.enviar_mail(asunto, _cuerpo_mail_it(atencion, metricas, url_dashboard), destinatarios_it,
-                                adjuntos=["report.md"])
+            correo.enviar_mail(asunto, _cuerpo_mail_it(atencion, metricas, url_dashboard), destinatarios_it)
             print(f"Mail a IT enviado a: {', '.join(destinatarios_it)}.")
         except Exception as e:
             print(f"No se pudo enviar el mail a IT: {e}")
@@ -302,10 +297,13 @@ def main(argv=None):
 
     metricas = calcular_metricas(resultados)
 
-    escribir_json(resultados)
-    escribir_md(resultados, atencion)
-    escribir_html(resultados, atencion, metricas)
-    _avisar_por_mail(atencion, metricas, hay_hallazgos_alta(resultados))
+    confluence_url = None
+    try:
+        confluence_url = confluence.publicar_reporte(resultados, atencion, metricas)
+    except Exception as e:
+        print(f"No se pudo publicar en Confluence: {e}")
+
+    _avisar_por_mail(atencion, metricas, hay_hallazgos_alta(resultados), confluence_url)
 
     print(f"Auditadas {len(urls)} URL(s). Ítems de indexación que requieren atención: {atencion}.")
     if atencion:
@@ -313,178 +311,6 @@ def main(argv=None):
     else:
         print("Sin problemas de indexación. Todo OK.")
     return 0
-
-
-def escribir_json(resultados):
-    with open("report.json", "w", encoding="utf-8") as f:
-        json.dump(resultados, f, ensure_ascii=False, indent=2)
-
-
-def escribir_md(resultados, atencion):
-    lineas = ["# Reporte de auditoría SEO — indexación y on-page", ""]
-    estado = "🔴 Requiere atención" if atencion else "🟢 Sin problemas de indexación"
-    lineas += [f"**Estado:** {estado}  ", f"**URLs auditadas:** {len(resultados)}", ""]
-
-    for r in resultados:
-        veredicto = r["reporte"].get("veredicto")
-        sufijo_veredicto = f" — Veredicto: **{veredicto}**" if veredicto else ""
-        lineas += [f"## {r['url']}{sufijo_veredicto}", ""]
-
-        google = r.get("google")
-        if google:
-            if google["indexada"] is True:
-                marca = "✅ Indexada por Google"
-            elif google["indexada"] is False:
-                marca = "❌ No indexada por Google"
-            else:
-                marca = "❓ Estado desconocido"
-            lineas += ["### Estado en Google (Search Console)", "",
-                       f"- **{marca}** — coverageState: `{google['coverage_state']}`",
-                       f"  - Último rastreo: {google['ultimo_rastreo'] or 'sin datos'}",
-                       ""]
-
-        for titulo, clave in (("Indexación", "indexacion"), ("On-page técnico", "on_page_tecnico")):
-            lineas += [f"### {titulo}", ""]
-            items = r["reporte"][clave]
-            if not items:
-                lineas += ["Sin hallazgos.", ""]
-                continue
-            for h in items:
-                lineas += [f"- **[{h['severidad'].upper()}] {h['campo']}** — {h['hallazgo']}",
-                           f"  - _Qué significa:_ {h['que_significa']}"]
-            lineas.append("")
-
-    with open("report.md", "w", encoding="utf-8") as f:
-        f.write("\n".join(lineas))
-
-
-_SEVERIDAD_LABEL = {"alta": "ALTA", "revisar": "A REVISAR", "media": "MEDIA", "baja": "BAJA"}
-_SEVERIDAD_COLOR = {"alta": "#dc2626", "revisar": "#ea580c", "media": "#ca8a04", "baja": "#2563eb"}
-_SEVERIDAD_EXPLICACION = {
-    "alta": ("Prioridad máxima, aunque no siempre por el mismo motivo: a veces puede impedir que Google "
-             "rastree o indexe la página (bloqueos, errores de acceso, canonical roto); otras veces no "
-             "afecta la indexación pero daña mucho cómo se ve en los resultados (sin título, sin meta "
-             "description) o es un problema de seguridad (contenido mixto)."),
-    "revisar": "No es necesariamente un error — hay que confirmar si es intencional (ej. un 'noindex' a propósito).",
-    "media": ("No bloquea la indexación ni es urgente, pero conviene mejorarlo (canonical faltante, "
-              "poco contenido, etc.)."),
-    "baja": "Detalle prolijo/técnico, de bajo impacto real (ej. URLs con mayúsculas o espacios).",
-}
-
-_CSS_DASHBOARD = """
-  body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; max-width: 900px;
-         margin: 2rem auto; padding: 0 1rem; color: #1f2937; background: #f9fafb; }
-  h1 { font-size: 1.4rem; }
-  .estado { font-size: 1.1rem; font-weight: 600; }
-  .resumen { margin-bottom: 1.5rem; }
-  .metricas { display: flex; gap: 0.75rem; flex-wrap: wrap; }
-  .metrica { border-left: 4px solid var(--color); background: #fff; padding: 0.5rem 1rem;
-             border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.08); min-width: 90px; }
-  .metrica-numero { display: block; font-size: 1.5rem; font-weight: 700; }
-  .metrica-etiqueta { display: block; font-size: 0.75rem; color: #6b7280; letter-spacing: 0.03em; }
-  .paginas { color: #4b5563; font-size: 0.9rem; }
-  .leyenda { list-style: none; margin: 0.75rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
-  .leyenda li { display: flex; gap: 0.5rem; align-items: baseline; font-size: 0.82rem; color: #4b5563; }
-  .leyenda .badge { flex-shrink: 0; }
-  .hallazgo { border-left: 4px solid var(--color); background: #fff; border-radius: 4px;
-              margin-bottom: 0.6rem; padding: 0.6rem 1rem; box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
-  .hallazgo summary { cursor: pointer; display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap; }
-  .badge { font-size: 0.7rem; font-weight: 700; color: #fff; background: var(--color);
-           border-radius: 3px; padding: 0.1rem 0.4rem; }
-  .campo { font-weight: 600; color: #374151; }
-  .mensaje { color: #1f2937; }
-  .que-significa { color: #4b5563; font-size: 0.9rem; }
-  .afecta { font-size: 0.85rem; color: #6b7280; margin-bottom: 0.2rem; }
-  .urls { font-size: 0.85rem; margin: 0; padding-left: 1.2rem; max-height: 200px; overflow-y: auto; }
-  .instancia { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid #f3f4f6; }
-  .instancia-mensaje { margin: 0 0 0.2rem; font-size: 0.9rem; color: #1f2937; }
-"""
-
-
-def _renderizar_instancia_html(instancia, mostrar_mensaje):
-    urls = instancia["urls"]
-    lista_urls = "".join(
-        f'<li><a href="{escape(u)}" target="_blank" rel="noopener">{escape(u)}</a></li>' for u in urls
-    )
-    mensaje = f'<p class="instancia-mensaje">{escape(instancia["hallazgo"])}</p>' if mostrar_mensaje else ""
-    return (
-        f'<div class="instancia">{mensaje}'
-        f'<p class="afecta">Afecta {len(urls)} página(s):</p>'
-        f'<ul class="urls">{lista_urls}</ul>'
-        f"</div>"
-    )
-
-
-def _renderizar_grupo_html(g):
-    color = _SEVERIDAD_COLOR.get(g["severidad"], "#6b7280")
-    etiqueta = _SEVERIDAD_LABEL.get(g["severidad"], g["severidad"].upper())
-    instancias = g["instancias"]
-    unico = len(instancias) == 1
-
-    if unico:
-        resumen = f'<span class="mensaje">{escape(instancias[0]["hallazgo"])}</span>'
-    else:
-        total_paginas = sum(len(i["urls"]) for i in instancias)
-        resumen = (f'<span class="mensaje">{len(instancias)} casos distintos '
-                   f"({total_paginas} página(s) en total)</span>")
-
-    cuerpo = "".join(_renderizar_instancia_html(i, mostrar_mensaje=not unico) for i in instancias)
-
-    return (
-        f'<details class="hallazgo" style="--color: {color}">'
-        f'<summary><span class="badge">{etiqueta}</span>'
-        f'<span class="campo">{escape(g["campo"])}</span>{resumen}</summary>'
-        f'<p class="que-significa"><em>Qué significa:</em> {escape(g["que_significa"])}</p>'
-        f"{cuerpo}"
-        f"</details>"
-    )
-
-
-def escribir_html(resultados, atencion, metricas=None):
-    """
-    Genera report.html: un dashboard autocontenido (CSS inline, sin JS ni
-    dependencias externas) con los hallazgos consolidados y ordenados por
-    prioridad, en vez de agrupados por página como report.md.
-    """
-    metricas = metricas or calcular_metricas(resultados)
-    grupos = ordenar_por_prioridad(agrupar_por_campo(agrupar_hallazgos(resultados)))
-    estado = "🔴 Requiere atención" if atencion else "🟢 Sin problemas de indexación"
-
-    filas_metricas = "".join(
-        f'<div class="metrica" style="--color: {_SEVERIDAD_COLOR[sev]}">'
-        f'<span class="metrica-numero">{metricas[sev]}</span>'
-        f'<span class="metrica-etiqueta">{_SEVERIDAD_LABEL[sev]}</span></div>'
-        for sev in ("alta", "revisar", "media", "baja")
-    )
-    bloques_hallazgos = "".join(_renderizar_grupo_html(g) for g in grupos) or "<p>Sin hallazgos.</p>"
-    filas_leyenda = "".join(
-        f'<li><span class="badge" style="--color: {_SEVERIDAD_COLOR[sev]}">{_SEVERIDAD_LABEL[sev]}</span>'
-        f"{escape(_SEVERIDAD_EXPLICACION[sev])}</li>"
-        for sev in ("alta", "revisar", "media", "baja")
-    )
-
-    pagina = f"""<!doctype html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Reporte de auditoría SEO</title>
-<style>{_CSS_DASHBOARD}</style>
-</head>
-<body>
-<h1>Reporte de auditoría SEO — indexación y on-page</h1>
-<p class="estado">{estado}</p>
-<div class="resumen">
-<div class="metricas">{filas_metricas}</div>
-<p class="paginas">{metricas["paginas_limpias"]} de {metricas["total_paginas"]} páginas sin hallazgos.</p>
-<ul class="leyenda">{filas_leyenda}</ul>
-</div>
-<div class="hallazgos">{bloques_hallazgos}</div>
-</body>
-</html>
-"""
-    with open("report.html", "w", encoding="utf-8") as f:
-        f.write(pagina)
 
 
 if __name__ == "__main__":

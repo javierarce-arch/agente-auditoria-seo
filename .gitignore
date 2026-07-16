@@ -8,12 +8,6 @@ env/
 build/
 dist/
 
-# Reportes generados por la auditoría
-report.md
-report.json
-report.html
-_site/
-
 # Credenciales (nunca subir)
 .env
 *credentials*.json
