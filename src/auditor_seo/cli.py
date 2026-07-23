@@ -19,7 +19,7 @@ import os
 import sys
 import time
 
-from auditor_seo import confluence, correo, gsc, multipagina
+from auditor_seo import confluence, correo, estado, gsc, multipagina
 from auditor_seo.auditor import THIN_CONTENT_DEFAULT, USER_AGENT_DEFAULT, auditar, cargar
 from auditor_seo.crawler import (
     DELAY_DEFAULT,
@@ -200,8 +200,13 @@ def construir_parser():
     p = argparse.ArgumentParser(description="Auditor SEO — audita una lista de URLs o un sitio crawleado.")
     p.add_argument("urls_file", nargs="?", default="urls.txt",
                     help="Archivo con URLs a auditar, una por línea (default: urls.txt). Se ignora con --crawl.")
-    p.add_argument("--crawl", metavar="URL_SEMILLA", default=None,
-                    help="En vez de leer urls_file, descubre las páginas crawleando el sitio desde esta URL.")
+    modo = p.add_mutually_exclusive_group()
+    modo.add_argument("--crawl", metavar="URL_SEMILLA", default=None,
+                       help="En vez de leer urls_file, descubre las páginas crawleando el sitio desde esta URL.")
+    modo.add_argument("--desde-estado", action="store_true",
+                       help="En vez de leer urls_file o crawlear, audita las URLs que quedaron con "
+                            f"severidad alta en la corrida anterior (ver {estado.RUTA_ESTADO_DEFAULT}). "
+                            "Si no hay ninguna, no se audita nada.")
     p.add_argument("--max-paginas", type=int, default=MAX_PAGINAS_DEFAULT,
                     help=f"Tope de páginas a crawlear (default: {MAX_PAGINAS_DEFAULT}).")
     p.add_argument("--max-profundidad", type=int, default=MAX_PROFUNDIDAD_DEFAULT,
@@ -233,6 +238,12 @@ def main(argv=None):
                          max_profundidad=args.max_profundidad, delay=args.delay,
                          user_agent=args.user_agent)
         print(f"Crawler encontró {len(urls)} página(s) en {args.crawl}.")
+    elif args.desde_estado:
+        urls = estado.cargar_estado(ruta=estado.RUTA_ESTADO_DEFAULT)
+        if not urls:
+            print("Sin URLs con severidad ALTA pendiente. No hay nada para auditar hoy.")
+            return 0
+        print(f"Recheck diario: {len(urls)} URL(s) con ALTA pendiente de la corrida anterior.")
     else:
         urls = leer_urls(args.urls_file)
 
@@ -294,6 +305,13 @@ def main(argv=None):
         extra = duplicados.get(r["url"])
         if extra:
             r["reporte"]["on_page_tecnico"].extend(extra)
+
+    # Solo --crawl (cubre todo el sitio) y --desde-estado (audita exactamente
+    # el conjunto que el estado ya tenía) son corridas representativas del
+    # universo que le importa al estado; el modo urls_file es un subconjunto
+    # arbitrario (pensado para pruebas puntuales) y no debe pisarlo.
+    if args.crawl or args.desde_estado:
+        estado.guardar_estado(resultados, ruta=estado.RUTA_ESTADO_DEFAULT)
 
     metricas = calcular_metricas(resultados)
 

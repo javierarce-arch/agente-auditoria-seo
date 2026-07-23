@@ -62,14 +62,27 @@ significa" en criollo.
   ver "Notificaciones por mail" más abajo.
 - `src/auditor_seo/confluence.py` — publica el dashboard consolidado como
   página de Confluence, ver "Confluence" más abajo.
+- `src/auditor_seo/estado.py` — persiste en `data/estado_alta.json` la lista
+  de URLs que quedaron con severidad ALTA, el único estado que sobrevive
+  entre corridas (ver "Cómo funciona la Action" más abajo).
 - `src/auditor_seo/cli.py` — orquesta la corrida sobre varias URLs (de
-  `urls.txt` o del crawler), publica el dashboard en Confluence y manda las
-  notificaciones por mail. Es el entrypoint de CI (expuesto como el comando
-  `auditor-seo`).
+  `urls.txt`, del crawler, o del estado persistido), publica el dashboard en
+  Confluence y manda las notificaciones por mail. Es el entrypoint de CI
+  (expuesto como el comando `auditor-seo`).
 - `scripts/gmail_auth.py` — genera el `token.json` para las notificaciones
   por mail (se corre una sola vez, a mano).
-- `urls.txt` — lista de páginas a auditar (una por línea).
-- `.github/workflows/auditoria.yml` — corre la auditoría en automático.
+- `urls.txt` — lista de páginas a auditar, una por línea. Es solo para
+  pruebas puntuales a mano (hoy tiene una sola URL de ejemplo) — el estado
+  real del sitio lo gobiernan el crawl quincenal y el recheck diario, no este
+  archivo (ver más abajo).
+- `data/estado_alta.json` — generado automáticamente por las corridas
+  quincenal y diaria; no se edita a mano.
+- `.github/workflows/auditoria_quincenal.yml` — auditoría completa del sitio
+  (crawl) cada ~15 días.
+- `.github/workflows/auditoria_diaria.yml` — recheck diario de las URLs con
+  ALTA pendiente; no hace nada si no queda ninguna.
+- `.github/workflows/auditoria.yml` — sandbox manual (`workflow_dispatch`)
+  para pruebas ad-hoc, sin schedule propio.
 - `.github/workflows/ci.yml` — corre lint (ruff) y tests (pytest) en cada
   push/PR.
 - `tests/` — tests de `pytest`, con `tests/fixtures/muestra_*.html` como
@@ -89,6 +102,10 @@ auditor-seo urls.txt
 
 # Con umbral de thin content personalizado (default: 150 palabras):
 auditor-seo urls.txt --umbral-thin-content 100
+
+# Recheck: audita solo las URLs que quedaron con severidad ALTA en la
+# corrida anterior (data/estado_alta.json). Si no hay ninguna, no hace nada.
+auditor-seo --desde-estado
 
 # Tests y lint:
 pytest
@@ -237,6 +254,19 @@ deshabilitado).
    ```
    `GSC_SITE_URL` también se puede pasar como `--gsc-site-url` en vez de variable de entorno.
 
+En CI, estos valores se cargan como **secrets** del repo (Settings → Secrets
+and variables → Actions):
+
+| Secret | Contenido |
+|--------|-----------|
+| `GSC_SERVICE_ACCOUNT_JSON` | El contenido completo del JSON de la service account. |
+| `GSC_SITE_URL` | La propiedad de Search Console a consultar. |
+
+El workflow reescribe el JSON en disco (`credentials/gsc_service_account.json`)
+al inicio de cada corrida a partir de `GSC_SERVICE_ACCOUNT_JSON`, y apunta
+`GSC_CREDENTIALS_JSON` a esa ruta — mismo patrón que `GMAIL_TOKEN_JSON`/
+`token.json` para el mail.
+
 ### Uso
 
 ```bash
@@ -337,13 +367,36 @@ partir de `GMAIL_TOKEN_JSON`. Si el token se revoca, hay que regenerarlo con
 
 ## Cómo funciona la Action
 
-Corre sola todos los días (cron) y también se puede disparar a mano desde la
-pestaña **Actions**. Al terminar publica el dashboard en Confluence y dispara
-las notificaciones por mail descriptas arriba (si están configuradas).
+Hay tres workflows de auditoría, con roles distintos:
 
-**La Action no se marca en rojo por hallazgos de SEO** — solo fallaría ante un
-error real del pipeline (por ejemplo, no se pudo instalar el paquete). La señal
-de "hay algo para revisar" vive en el mail y en el dashboard, no en el
+- **`auditoria_quincenal.yml`** — cada ~15 días (días 1 y 16 de cada mes, cron
+  no tiene una expresión nativa para "cada 15 días"), audita **todo el sitio**
+  vía crawler (`--crawl`) y reemplaza por completo `data/estado_alta.json` con
+  las URLs que quedaron con severidad ALTA.
+- **`auditoria_diaria.yml`** — todos los días, rechequea **solo** esas URLs
+  (`auditor-seo --desde-estado`). Si no queda ninguna con ALTA, no audita
+  nada: no crawlea, no publica en Confluence, no manda mail. Los días 1 y 16
+  se salta sola (ese día ya corrió la quincenal, que cubre todo el sitio y
+  reconcilia el estado) — evita duplicar la corrida y una carrera al
+  actualizar el mismo archivo de estado.
+- **`auditoria.yml`** — sandbox manual (`workflow_dispatch` únicamente, sin
+  schedule), para probar un modo puntual (`urls.txt` o `--crawl`) sin afectar
+  el estado real.
+
+Las dos primeras terminan con un commit automático (`github-actions[bot]`) que
+actualiza `data/estado_alta.json` **solo si cambió** — así la próxima corrida
+diaria sabe qué URLs siguen con ALTA. El archivo no contiene nada más que esa
+lista (sin timestamp), justamente para que ese commit sea idempotente cuando
+nada cambió.
+
+En cualquiera de los tres, al terminar se publica el dashboard en Confluence y
+se disparan las notificaciones por mail descriptas arriba (si están
+configuradas) — salvo que `auditoria_diaria.yml` haya cortado temprano por no
+tener nada para auditar.
+
+**Ninguna Action se marca en rojo por hallazgos de SEO** — solo fallaría ante
+un error real del pipeline (por ejemplo, no se pudo instalar el paquete). La
+señal de "hay algo para revisar" vive en el mail y en el dashboard, no en el
 semáforo verde/rojo de GitHub: mandar eso a rojo daba la falsa impresión de que
 la corrida se rompió, cuando en realidad corrió bien y encontró hallazgos reales.
 
@@ -352,7 +405,9 @@ Esa señal se calcula igual que antes con `SEVERIDADES_DE_ATENCION`, dentro de
 `alta` o `revisar` (un `noindex` inesperado, un canonical a otra URL, una página
 que no responde). Ese conteo determina el 🔴/🟢 del dashboard y el asunto del
 mail a IT, y es un criterio distinto y más angosto que el del mail a Marketing
-(que mira ALTA en cualquier categoría, no solo indexación).
+(que mira ALTA en cualquier categoría, no solo indexación), y también distinto
+del que usa `data/estado_alta.json` (que mira ALTA en indexación **u**
+on-page técnico, vía `estado.urls_con_alta()`).
 
 ## Roadmap (próximos pasos)
 

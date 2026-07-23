@@ -1,0 +1,88 @@
+name: Auditoría SEO diaria (recheck de ALTA)
+
+# Todos los días, rechequea SOLO las URLs que quedaron con severidad ALTA en
+# la corrida anterior (data/estado_alta.json). Si no hay ninguna, no audita
+# nada — ver auditor_seo.cli --desde-estado. Los días 1 y 16 se saltea: ese
+# día corre la auditoría quincenal completa (auditoria_quincenal.yml), que ya
+# audita todo el sitio y reconcilia el estado.
+on:
+  schedule:
+    - cron: "0 11 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: auditoria-seo-estado
+  cancel-in-progress: false
+
+jobs:
+  auditoria:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Descargar el repo
+        uses: actions/checkout@v4
+
+      - name: Saltar si hoy corre la auditoría quincenal
+        id: chequeo_dia
+        run: |
+          dia=$(date -u +%d)
+          if [ "$dia" = "01" ] || [ "$dia" = "16" ]; then
+            echo "Hoy (día $dia UTC) corre la auditoría quincenal completa; se salta la diaria."
+            echo "saltar=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "saltar=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Preparar Python
+        if: steps.chequeo_dia.outputs.saltar == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias
+        if: steps.chequeo_dia.outputs.saltar == 'false'
+        run: pip install ".[mail,gsc]"
+
+      - name: Reconstruir el token de Gmail en disco
+        if: steps.chequeo_dia.outputs.saltar == 'false'
+        env:
+          GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
+        run: printf '%s' "$GMAIL_TOKEN_JSON" > token.json
+
+      - name: Reconstruir credenciales de Search Console en disco
+        if: steps.chequeo_dia.outputs.saltar == 'false'
+        env:
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+        run: |
+          mkdir -p credentials
+          printf '%s' "$GSC_SERVICE_ACCOUNT_JSON" > credentials/gsc_service_account.json
+
+      - name: Correr el recheck de ALTA
+        if: steps.chequeo_dia.outputs.saltar == 'false'
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          EMAIL_TO_IT: ${{ secrets.EMAIL_TO_IT }}
+          EMAIL_TO_MARKETING: ${{ secrets.EMAIL_TO_MARKETING }}
+          CONFLUENCE_BASE_URL: ${{ secrets.CONFLUENCE_BASE_URL }}
+          CONFLUENCE_EMAIL: ${{ secrets.CONFLUENCE_EMAIL }}
+          CONFLUENCE_API_TOKEN: ${{ secrets.CONFLUENCE_API_TOKEN }}
+          CONFLUENCE_SPACE_KEY: ${{ secrets.CONFLUENCE_SPACE_KEY }}
+          CONFLUENCE_PARENT_PAGE_ID: ${{ secrets.CONFLUENCE_PARENT_PAGE_ID }}
+          GSC_SITE_URL: ${{ secrets.GSC_SITE_URL }}
+          GSC_CREDENTIALS_JSON: credentials/gsc_service_account.json
+        run: auditor-seo --desde-estado
+
+      - name: Actualizar data/estado_alta.json si cambió
+        if: steps.chequeo_dia.outputs.saltar == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/estado_alta.json
+          if git diff --cached --quiet; then
+            echo "Sin cambios en el estado; no se commitea."
+            exit 0
+          fi
+          git commit -m "chore(estado): actualiza data/estado_alta.json (recheck diario) [skip ci]"
+          git push origin HEAD:main

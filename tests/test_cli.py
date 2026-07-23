@@ -1,4 +1,6 @@
-from auditor_seo import correo, gsc
+import pytest
+
+from auditor_seo import cli, correo, estado, gsc
 from auditor_seo.auditor import USER_AGENT_DEFAULT
 from auditor_seo.cli import (
     _avisar_por_mail,
@@ -71,6 +73,77 @@ def test_auditor_corre_sin_credenciales_gsc(monkeypatch):
 
     assert gsc.credenciales_disponibles() is False
     assert gsc.construir_inspector(args.gsc_site_url or "https://sitio.test/") is None
+
+
+def test_desde_estado_flag_parsea_solo():
+    args = construir_parser().parse_args(["--desde-estado"])
+
+    assert args.desde_estado is True
+    assert args.crawl is None
+
+
+def test_desde_estado_y_crawl_combinados_es_error():
+    with pytest.raises(SystemExit):
+        construir_parser().parse_args(["--crawl", "https://sitio.test/", "--desde-estado"])
+
+
+def _preparar_mocks_de_pipeline(monkeypatch):
+    """Mockea todo lo que main() toca aguas abajo de la selección de URLs,
+    para poder probar el flujo completo sin red ni credenciales."""
+    monkeypatch.setattr(cli, "cargar", lambda origen, user_agent: ("<html></html>", {}, True))
+    monkeypatch.setattr(cli, "auditar", lambda *a, **k: {"indexacion": [], "on_page_tecnico": []})
+    monkeypatch.setattr(cli.multipagina, "chequear_duplicados", lambda paginas: {})
+    monkeypatch.setattr(cli.confluence, "publicar_reporte", lambda *a, **k: None)
+    monkeypatch.setattr(correo, "credenciales_disponibles", lambda: False)
+    monkeypatch.delenv("GSC_SITE_URL", raising=False)
+    monkeypatch.delenv("GSC_CREDENTIALS_JSON", raising=False)
+
+
+def test_desde_estado_sin_urls_pendientes_no_audita_nada(monkeypatch, tmp_path):
+    _preparar_mocks_de_pipeline(monkeypatch)
+    ruta_estado = tmp_path / "estado.json"
+    monkeypatch.setattr(estado, "RUTA_ESTADO_DEFAULT", str(ruta_estado))
+    llamadas_confluence = []
+    monkeypatch.setattr(cli.confluence, "publicar_reporte", lambda *a, **k: llamadas_confluence.append(a))
+
+    resultado = cli.main(["--desde-estado"])
+
+    assert resultado == 0
+    assert llamadas_confluence == []
+    assert not ruta_estado.exists()
+
+
+def test_desde_estado_con_urls_pendientes_audita_y_reconcilia_estado(monkeypatch, tmp_path):
+    _preparar_mocks_de_pipeline(monkeypatch)
+    ruta_estado = tmp_path / "estado.json"
+    ruta_estado.write_text('{"urls_alta": ["https://sitio.test/a"]}', encoding="utf-8")
+    monkeypatch.setattr(estado, "RUTA_ESTADO_DEFAULT", str(ruta_estado))
+    llamadas_confluence = []
+    monkeypatch.setattr(cli.confluence, "publicar_reporte", lambda *a, **k: llamadas_confluence.append(a) or None)
+
+    resultado = cli.main(["--desde-estado"])
+
+    assert resultado == 0
+    assert len(llamadas_confluence) == 1
+    # El hallazgo mockeado no tiene severidad alta, así que la URL se
+    # reconcilia (se da por arreglada) y sale del estado.
+    assert estado.cargar_estado(ruta=str(ruta_estado)) == []
+
+
+def test_modo_urls_file_no_toca_el_estado(monkeypatch, tmp_path):
+    _preparar_mocks_de_pipeline(monkeypatch)
+    ruta_estado = tmp_path / "estado.json"
+    ruta_estado.write_text('{"urls_alta": ["https://sitio.test/viejo"]}', encoding="utf-8")
+    monkeypatch.setattr(estado, "RUTA_ESTADO_DEFAULT", str(ruta_estado))
+    urls_file = tmp_path / "urls.txt"
+    urls_file.write_text("https://sitio.test/a\n", encoding="utf-8")
+
+    resultado = cli.main([str(urls_file)])
+
+    assert resultado == 0
+    # El modo urls_file no debe pisar el estado real con un subconjunto
+    # arbitrario de URLs.
+    assert estado.cargar_estado(ruta=str(ruta_estado)) == ["https://sitio.test/viejo"]
 
 
 def _hallazgo(campo, severidad, hallazgo="mensaje", que_significa="significado"):

@@ -1,32 +1,32 @@
-name: Auditoría SEO (manual)
+name: Auditoría SEO quincenal (sitio completo)
 
-# Sandbox ad-hoc: sin schedule propio (las corridas automáticas viven en
-# auditoria_quincenal.yml y auditoria_diaria.yml). Solo se dispara a mano,
-# para pruebas puntuales — por eso queda con permissions: read y sin step de
-# commit: aunque se corra en modo crawl, lo que escriba en data/estado_alta.json
-# se descarta al terminar el job (no hay push), así nunca pisa el estado real.
+# Auditoría completa del sitio vía crawler, cada ~15 días (días 1 y 16 de cada
+# mes — cron no tiene una expresión nativa para "cada 15 días" porque los
+# meses no son múltiplos de 15). Esta corrida es la fuente de verdad de
+# data/estado_alta.json: reemplaza el estado completo con las URLs que
+# quedaron con severidad ALTA, para que auditoria_diaria.yml sepa qué
+# rechequear el resto de los días.
 on:
+  schedule:
+    - cron: "0 11 1,16 * *"
   workflow_dispatch:
     inputs:
-      modo:
-        description: "Cómo se descubren las páginas a auditar"
-        type: choice
-        options:
-          - urls.txt
-          - crawl
-        default: urls.txt
       crawl_semilla:
-        description: "URL semilla para --crawl (solo si modo=crawl)"
+        description: "URL semilla para el crawl"
         default: "https://utnba.centrodeelearning.com/"
       crawl_max_paginas:
-        description: "Tope de páginas a crawlear (solo si modo=crawl)"
+        description: "Tope de páginas a crawlear"
         default: "80"
+
+concurrency:
+  group: auditoria-seo-estado
+  cancel-in-progress: false
 
 jobs:
   auditoria:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Descargar el repo
         uses: actions/checkout@v4
@@ -51,9 +51,8 @@ jobs:
           mkdir -p credentials
           printf '%s' "$GSC_SERVICE_ACCOUNT_JSON" > credentials/gsc_service_account.json
 
-      - name: Correr la auditoría
+      - name: Correr la auditoría completa (crawl)
         env:
-          MODO: ${{ inputs.modo || 'urls.txt' }}
           SEMILLA: ${{ inputs.crawl_semilla || 'https://utnba.centrodeelearning.com/' }}
           MAX_PAGINAS: ${{ inputs.crawl_max_paginas || '80' }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
@@ -67,9 +66,16 @@ jobs:
           CONFLUENCE_PARENT_PAGE_ID: ${{ secrets.CONFLUENCE_PARENT_PAGE_ID }}
           GSC_SITE_URL: ${{ secrets.GSC_SITE_URL }}
           GSC_CREDENTIALS_JSON: credentials/gsc_service_account.json
+        run: auditor-seo --crawl "$SEMILLA" --max-paginas "$MAX_PAGINAS"
+
+      - name: Actualizar data/estado_alta.json si cambió
         run: |
-          if [ "$MODO" = "crawl" ]; then
-            auditor-seo --crawl "$SEMILLA" --max-paginas "$MAX_PAGINAS"
-          else
-            auditor-seo urls.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/estado_alta.json
+          if git diff --cached --quiet; then
+            echo "Sin cambios en el estado; no se commitea."
+            exit 0
           fi
+          git commit -m "chore(estado): actualiza data/estado_alta.json (auditoría quincenal) [skip ci]"
+          git push origin HEAD:main
